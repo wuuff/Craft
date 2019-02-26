@@ -91,6 +91,11 @@ typedef struct {
     float rx;
     float ry;
     float t;
+    float bobx;
+    float boby;
+    float bobz;
+    float bobm;
+    uint8_t bobd;
 } State;
 
 typedef struct {
@@ -1618,7 +1623,8 @@ int render_chunks(Attrib *attrib, Player *player) {
     float matrix[16];
     set_matrix_3d(
         matrix, g->width, g->height,
-        s->x, s->y, s->z, s->rx, s->ry, g->fov, g->ortho, g->render_radius);
+        s->x+s->bobx, s->y+s->boby, s->z+s->bobz,
+        s->rx, s->ry, g->fov, g->ortho, g->render_radius);
     float planes[6][4];
     frustum_planes(planes, g->render_radius, matrix);
     glUseProgram(attrib->program);
@@ -1653,7 +1659,8 @@ void render_signs(Attrib *attrib, Player *player) {
     float matrix[16];
     set_matrix_3d(
         matrix, g->width, g->height,
-        s->x, s->y, s->z, s->rx, s->ry, g->fov, g->ortho, g->render_radius);
+        s->x+s->bobx, s->y+s->boby, s->z+s->bobz,
+        s->rx, s->ry, g->fov, g->ortho, g->render_radius);
     float planes[6][4];
     frustum_planes(planes, g->render_radius, matrix);
     glUseProgram(attrib->program);
@@ -1686,7 +1693,8 @@ void render_sign(Attrib *attrib, Player *player) {
     float matrix[16];
     set_matrix_3d(
         matrix, g->width, g->height,
-        s->x, s->y, s->z, s->rx, s->ry, g->fov, g->ortho, g->render_radius);
+        s->x+s->bobx, s->y+s->boby, s->z+s->bobz,
+        s->rx, s->ry, g->fov, g->ortho, g->render_radius);
     glUseProgram(attrib->program);
     glUniformMatrix4fv(attrib->matrix, 1, GL_FALSE, matrix);
     glUniform1i(attrib->sampler, 3);
@@ -1706,7 +1714,8 @@ void render_players(Attrib *attrib, Player *player) {
     float matrix[16];
     set_matrix_3d(
         matrix, g->width, g->height,
-        s->x, s->y, s->z, s->rx, s->ry, g->fov, g->ortho, g->render_radius);
+        s->x+s->bobx, s->y+s->boby, s->z+s->bobz,
+        s->rx, s->ry, g->fov, g->ortho, g->render_radius);
     glUseProgram(attrib->program);
     glUniformMatrix4fv(attrib->matrix, 1, GL_FALSE, matrix);
     glUniform3f(attrib->camera, s->x, s->y, s->z);
@@ -1738,7 +1747,8 @@ void render_wireframe(Attrib *attrib, Player *player) {
     float matrix[16];
     set_matrix_3d(
         matrix, g->width, g->height,
-        s->x, s->y, s->z, s->rx, s->ry, g->fov, g->ortho, g->render_radius);
+        s->x+s->bobx, s->y+s->boby, s->z+s->bobz,
+        s->rx, s->ry, g->fov, g->ortho, g->render_radius);
     int hx, hy, hz;
     int hw = hit_test(0, s->x, s->y, s->z, s->rx, s->ry, &hx, &hy, &hz);
     if (is_obstacle(hw)) {
@@ -2458,6 +2468,26 @@ void handle_movement(double dt) {
     vx = vx * ut * speed;
     vy = vy * ut * speed;
     vz = vz * ut * speed;
+    // viewbob
+    if( s->bobm < -1 ) s->bobd = -1;
+    if( s->bobm > 1 ) s->bobd = 1;
+    float bx, by, bz;
+    get_motion_vector(0, 0, s->bobd, s->rx, s->ry, &bx, &by, &bz);
+    s->bobm = s->bobd == 1 ? s->bobm-ut*50 : s->bobm+ut*50;
+    //bob left and right if going forward/backward
+    if( !g->flying && sz != 0 ){ 
+        s->bobx = 0.032 * bx * s->bobm;
+        s->bobz = 0.032 * bz * s->bobm;
+    }
+    //bob up and down if moving in any direction
+    if( !g->flying && sz != 0 | sx != 0 ){
+        s->boby = s->bobm < 0 ? 0.028 * s->bobm : -0.027 * s->bobm;
+    }else{
+        s->bobx = 0;
+        s->boby = 0;
+        s->bobz = 0;
+    }
+    // end viewbob
     for (int i = 0; i < step; i++) {
         if (g->flying) {
             dy = 0;
