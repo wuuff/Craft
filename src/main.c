@@ -39,6 +39,8 @@
 #define WORKER_BUSY 1
 #define WORKER_DONE 2
 
+uint8_t superboost;
+
 typedef struct {
     Map map;
     Map lights;
@@ -2192,6 +2194,11 @@ void on_key(GLFWwindow *window, int key, int scancode, int action, int mods) {
     if (action != GLFW_PRESS) {
         return;
     }
+    if( !g->typing ){
+        if( key == GLFW_KEY_B ){
+            superboost = !superboost;
+        }
+    }
     if (key == GLFW_KEY_ESCAPE) {
         if (g->typing) {
             g->typing = 0;
@@ -2439,6 +2446,9 @@ void handle_movement(double dt) {
         }
     }
     float speed = g->flying ? 20 : 5;
+    if( superboost ){
+      speed *= 8;
+    }
     int estimate = roundf(sqrtf(
         powf(vx * speed, 2) +
         powf(vy * speed + ABS(dy) * 2, 2) +
