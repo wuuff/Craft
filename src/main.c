@@ -703,7 +703,7 @@ int hit_test_face(Player *player, int *x, int *y, int *z, int *face) {
     return 0;
 }
 
-int collide(int height, float *x, float *y, float *z) {
+int collide(int height, float *x, float *y, float *z, float *ydiff) {
     int result = 0;
     int p = chunked(*x);
     int q = chunked(*z);
@@ -719,12 +719,18 @@ int collide(int height, float *x, float *y, float *z) {
     float py = *y - ny;
     float pz = *z - nz;
     float pad = 0.25;
+    uint8_t coll_ok = 1;
+    uint8_t need_jump = 0;
     for (int dy = 0; dy < height; dy++) {
         if (px < -pad && is_obstacle(map_get(map, nx - 1, ny - dy, nz))) {
             *x = nx - pad;
+            if( dy == 0 ) coll_ok = 0;
+            else if( coll_ok ) need_jump = 1;
         }
         if (px > pad && is_obstacle(map_get(map, nx + 1, ny - dy, nz))) {
             *x = nx + pad;
+            if( dy == 0 ) coll_ok = 0;
+            else if( coll_ok ) need_jump = 1;
         }
         if (py < -pad && is_obstacle(map_get(map, nx, ny - dy - 1, nz))) {
             *y = ny - pad;
@@ -736,10 +742,20 @@ int collide(int height, float *x, float *y, float *z) {
         }
         if (pz < -pad && is_obstacle(map_get(map, nx, ny - dy, nz - 1))) {
             *z = nz - pad;
+            if( dy == 0 ) coll_ok = 0;
+            else if( coll_ok ) need_jump = 1;
         }
         if (pz > pad && is_obstacle(map_get(map, nx, ny - dy, nz + 1))) {
             *z = nz + pad;
+            if( dy == 0 ) coll_ok = 0;
+            else if( coll_ok ) need_jump = 1;
         }
+    }
+    /* If there's no block at head height, a block at foot height, and
+       standing on firm ground, then autojump */
+    if( need_jump && result == 1 ){
+      *ydiff = 7;
+      result = 0;
     }
     return result;
 }
@@ -2499,7 +2515,7 @@ void handle_movement(double dt) {
         s->x += vx;
         s->y += vy + dy * ut;
         s->z += vz;
-        if (collide(2, &s->x, &s->y, &s->z)) {
+        if (collide(2, &s->x, &s->y, &s->z, &dy)) {
             dy = 0;
         }
     }
