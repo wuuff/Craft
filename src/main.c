@@ -40,6 +40,7 @@
 #define WORKER_DONE 2
 
 uint8_t superboost;
+uint8_t thirdperson;
 
 typedef struct {
     Map map;
@@ -1629,6 +1630,25 @@ void builder_block(int x, int y, int z, int w) {
     }
 }
 
+void get_camera_displacement(float rx, float ry,
+    float *cx, float *cy, float *cz){
+    *cx = 0;
+    *cy = 0;
+    *cz = 0;
+    if( thirdperson == 1 ){
+      get_motion_vector(1, 1, 0, rx, ry-0.1, cx, cy, cz);
+      *cx *= 4;
+      *cy *= 4;
+      *cz *= 4;
+    }else if( thirdperson == 2 ){
+      get_motion_vector(1, 1, 1, rx+1.1, ry-0.25, cx, cy, cz);
+      *cx *= 1.5;
+      *cy *= 1.5;
+      *cz *= 1.5;
+    }
+    *cy += 0;//0.32;
+}
+
 int render_chunks(Attrib *attrib, Player *player) {
     int result = 0;
     State *s = &player->state;
@@ -1637,9 +1657,11 @@ int render_chunks(Attrib *attrib, Player *player) {
     int q = chunked(s->z);
     float light = get_daylight();
     float matrix[16];
+    float cx, cy, cz;
+    get_camera_displacement( s->rx, s->ry, &cx, &cy, &cz );
     set_matrix_3d(
         matrix, g->width, g->height,
-        s->x+s->bobx, s->y+s->boby, s->z+s->bobz,
+        s->x+s->bobx+cx, s->y+s->boby+cy, s->z+s->bobz+cz,
         s->rx, s->ry, g->fov, g->ortho, g->render_radius);
     float planes[6][4];
     frustum_planes(planes, g->render_radius, matrix);
@@ -1673,9 +1695,11 @@ void render_signs(Attrib *attrib, Player *player) {
     int p = chunked(s->x);
     int q = chunked(s->z);
     float matrix[16];
+    float cx, cy, cz;
+    get_camera_displacement( s->rx, s->ry, &cx, &cy, &cz );
     set_matrix_3d(
         matrix, g->width, g->height,
-        s->x+s->bobx, s->y+s->boby, s->z+s->bobz,
+        s->x+s->bobx+cx, s->y+s->boby+cy, s->z+s->bobz+cz,
         s->rx, s->ry, g->fov, g->ortho, g->render_radius);
     float planes[6][4];
     frustum_planes(planes, g->render_radius, matrix);
@@ -1707,9 +1731,11 @@ void render_sign(Attrib *attrib, Player *player) {
     }
     State *s = &player->state;
     float matrix[16];
+    float cx, cy, cz;
+    get_camera_displacement( s->rx, s->ry, &cx, &cy, &cz );
     set_matrix_3d(
         matrix, g->width, g->height,
-        s->x+s->bobx, s->y+s->boby, s->z+s->bobz,
+        s->x+s->bobx+cx, s->y+s->boby+cy, s->z+s->bobz+cz,
         s->rx, s->ry, g->fov, g->ortho, g->render_radius);
     glUseProgram(attrib->program);
     glUniformMatrix4fv(attrib->matrix, 1, GL_FALSE, matrix);
@@ -1728,9 +1754,11 @@ void render_sign(Attrib *attrib, Player *player) {
 void render_players(Attrib *attrib, Player *player) {
     State *s = &player->state;
     float matrix[16];
+    float cx, cy, cz;
+    get_camera_displacement( s->rx, s->ry, &cx, &cy, &cz );
     set_matrix_3d(
         matrix, g->width, g->height,
-        s->x+s->bobx, s->y+s->boby, s->z+s->bobz,
+        s->x+s->bobx+cx, s->y+s->boby+cy, s->z+s->bobz+cz,
         s->rx, s->ry, g->fov, g->ortho, g->render_radius);
     glUseProgram(attrib->program);
     glUniformMatrix4fv(attrib->matrix, 1, GL_FALSE, matrix);
@@ -1739,7 +1767,7 @@ void render_players(Attrib *attrib, Player *player) {
     glUniform1f(attrib->timer, time_of_day());
     for (int i = 0; i < g->player_count; i++) {
         Player *other = g->players + i;
-        if (other != player) {
+        if (thirdperson || other != player) {
             draw_player(attrib, other);
         }
     }
@@ -1761,9 +1789,11 @@ void render_sky(Attrib *attrib, Player *player, GLuint buffer) {
 void render_wireframe(Attrib *attrib, Player *player) {
     State *s = &player->state;
     float matrix[16];
+    float cx, cy, cz;
+    get_camera_displacement( s->rx, s->ry, &cx, &cy, &cz );
     set_matrix_3d(
         matrix, g->width, g->height,
-        s->x+s->bobx, s->y+s->boby, s->z+s->bobz,
+        s->x+s->bobx+cx, s->y+s->boby+cy, s->z+s->bobz+cz,
         s->rx, s->ry, g->fov, g->ortho, g->render_radius);
     int hx, hy, hz;
     int hw = hit_test(0, s->x, s->y, s->z, s->rx, s->ry, &hx, &hy, &hz);
@@ -1781,15 +1811,17 @@ void render_wireframe(Attrib *attrib, Player *player) {
 
 void render_crosshairs(Attrib *attrib) {
     float matrix[16];
-    set_matrix_2d(matrix, g->width, g->height);
-    glUseProgram(attrib->program);
-    glLineWidth(4 * g->scale);
-    glEnable(GL_COLOR_LOGIC_OP);
-    glUniformMatrix4fv(attrib->matrix, 1, GL_FALSE, matrix);
-    GLuint crosshair_buffer = gen_crosshair_buffer();
-    draw_lines(attrib, crosshair_buffer, 2, 4);
-    del_buffer(crosshair_buffer);
-    glDisable(GL_COLOR_LOGIC_OP);
+    if( !thirdperson ){
+        set_matrix_2d(matrix, g->width, g->height);
+        glUseProgram(attrib->program);
+        glLineWidth(4 * g->scale);
+        glEnable(GL_COLOR_LOGIC_OP);
+        glUniformMatrix4fv(attrib->matrix, 1, GL_FALSE, matrix);
+        GLuint crosshair_buffer = gen_crosshair_buffer();
+        draw_lines(attrib, crosshair_buffer, 2, 4);
+        del_buffer(crosshair_buffer);
+        glDisable(GL_COLOR_LOGIC_OP);
+    }
 }
 
 void render_item(Attrib *attrib) {
@@ -2223,6 +2255,10 @@ void on_key(GLFWwindow *window, int key, int scancode, int action, int mods) {
     if( !g->typing ){
         if( key == GLFW_KEY_B ){
             superboost = !superboost;
+        }
+        if( key == GLFW_KEY_C ){
+            thirdperson++;
+            thirdperson %= 3;
         }
     }
     if (key == GLFW_KEY_ESCAPE) {
