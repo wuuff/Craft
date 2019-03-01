@@ -163,6 +163,9 @@ typedef struct {
 
 static Model model;
 static Model *g = &model;
+Block undo_block;
+SignList undo_signs;
+uint8_t undo_valid;
 
 int chunked(float x) {
     return floorf(roundf(x) / CHUNK_SIZE);
@@ -1630,6 +1633,47 @@ void builder_block(int x, int y, int z, int w) {
     }
 }
 
+void add_undo(int x, int y, int z){
+    undo_block.x = x;
+    undo_block.y = y;
+    undo_block.z = z;
+    undo_block.w = get_block(x,y,z);
+
+    int p = chunked(x);
+    int q = chunked(z);
+    Chunk *chunk = find_chunk(p, q);
+    SignList signs = chunk->signs;
+    Sign *sign = signs.data;
+    Sign *undo_sign = undo_signs.data;
+    undo_signs.size = 0;
+    /* Loop through all signs in the chunk and retrieve the ones for all
+       faces of this cube.  The undo_signs list has space allocated for 6,
+       so it should always have room. */
+    for( int i = 0; i < signs.size; i++ ){
+        if( x == sign->x && y == sign->y && z == sign->z ){
+            memcpy(undo_sign, sign, sizeof(Sign));
+            undo_sign++;
+            undo_signs.size++;
+        }
+        sign++;
+    }
+    undo_valid = 1;
+}
+
+void undo(){
+    if( undo_valid ){
+        undo_valid = 0;
+        set_block(undo_block.x, undo_block.y, undo_block.z, undo_block.w);
+        /* If this block had any signs, restore them */
+        Sign *undo_sign = undo_signs.data;
+        for( int i = 0; i < undo_signs.size; i++ ){
+            set_sign(undo_block.x, undo_block.y, undo_block.z,
+              undo_sign->face, undo_sign->text);
+            undo_sign++;
+        }
+    }
+}
+
 void get_camera_displacement(float rx, float ry,
     float *cx, float *cy, float *cz){
     *cx = 0;
@@ -2183,6 +2227,9 @@ void parse_command(const char *buffer, int forward) {
     else if (sscanf(buffer, "/cylinder %d", &radius) == 1) {
         cylinder(&g->block0, &g->block1, radius, 0);
     }
+    else if (strcmp(buffer, "/undo") == 0) {
+        undo();
+    }
     else if (forward) {
         client_talk(buffer);
     }
@@ -2202,6 +2249,7 @@ void on_left_click() {
     int hx, hy, hz;
     int hw = hit_test(0, s->x, s->y, s->z, s->rx, s->ry, &hx, &hy, &hz);
     if (hy > 0 && hy < 256 && is_destructable(hw)) {
+	add_undo(hx, hy, hz);
         set_block(hx, hy, hz, 0);
         record_block(hx, hy, hz, 0);
         if (is_plant(get_block(hx, hy + 1, hz))) {
@@ -2216,6 +2264,7 @@ void on_right_click() {
     int hw = hit_test(1, s->x, s->y, s->z, s->rx, s->ry, &hx, &hy, &hz);
     if (hy > 0 && hy < 256 && is_obstacle(hw)) {
         if (!player_intersects_block(2, s->x, s->y, s->z, hx, hy, hz)) {
+	    add_undo(hx, hy, hz);
             set_block(hx, hy, hz, items[g->item_index]);
             record_block(hx, hy, hz, items[g->item_index]);
         }
@@ -2855,6 +2904,10 @@ int main(int argc, char **argv) {
         me->name[0] = '\0';
         me->buffer = 0;
         g->player_count = 1;
+
+	// INITIALIZE UNDO VARIABLES //
+	undo_valid = 0;
+	sign_list_alloc(&undo_signs, 6);
 
         // LOAD STATE FROM DATABASE //
         int loaded = db_load_state(&s->x, &s->y, &s->z, &s->rx, &s->ry);
