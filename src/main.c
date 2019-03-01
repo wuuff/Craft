@@ -39,6 +39,8 @@
 #define WORKER_BUSY 1
 #define WORKER_DONE 2
 
+#define UNDO_NUM 8
+
 uint8_t superboost;
 uint8_t thirdperson;
 
@@ -163,9 +165,11 @@ typedef struct {
 
 static Model model;
 static Model *g = &model;
-Block undo_block;
-SignList undo_signs;
-uint8_t undo_valid;
+Block undo_blocks[UNDO_NUM];
+SignList undo_signs[UNDO_NUM];
+int undo_start = 0;
+int undo_curr = -1;
+int redo_curr = -1;
 
 int chunked(float x) {
     return floorf(roundf(x) / CHUNK_SIZE);
@@ -1633,45 +1637,45 @@ void builder_block(int x, int y, int z, int w) {
     }
 }
 
-void add_undo(int x, int y, int z){
-    undo_block.x = x;
-    undo_block.y = y;
-    undo_block.z = z;
-    undo_block.w = get_block(x,y,z);
-
+void get_signs(SignList* dest_signs, int x, int y, int z){
     int p = chunked(x);
     int q = chunked(z);
     Chunk *chunk = find_chunk(p, q);
     SignList signs = chunk->signs;
     Sign *sign = signs.data;
-    Sign *undo_sign = undo_signs.data;
-    undo_signs.size = 0;
-    /* Loop through all signs in the chunk and retrieve the ones for all
-       faces of this cube.  The undo_signs list has space allocated for 6,
-       so it should always have room. */
+
+    Sign *dest_sign = dest_signs->data;
     for( int i = 0; i < signs.size; i++ ){
         if( x == sign->x && y == sign->y && z == sign->z ){
-            memcpy(undo_sign, sign, sizeof(Sign));
-            undo_sign++;
-            undo_signs.size++;
+            memcpy(dest_sign, sign, sizeof(Sign));
+            dest_sign++;
+            dest_signs->size++;
         }
         sign++;
     }
-    undo_valid = 1;
 }
 
-void undo(){
-    if( undo_valid ){
-        undo_valid = 0;
-        set_block(undo_block.x, undo_block.y, undo_block.z, undo_block.w);
-        /* If this block had any signs, restore them */
-        Sign *undo_sign = undo_signs.data;
-        for( int i = 0; i < undo_signs.size; i++ ){
-            set_sign(undo_block.x, undo_block.y, undo_block.z,
-              undo_sign->face, undo_sign->text);
-            undo_sign++;
-        }
+void add_undo(int x, int y, int z){
+    /* Increment the current undo index, and shift redo index forward as well.
+       Wrap around undo buffer if necessary. */
+    undo_curr++;
+    undo_curr %= UNDO_NUM;
+    redo_curr = undo_curr;
+    if( undo_curr == undo_start ){
+        undo_start++;
+        undo_start %= UNDO_NUM;
     }
+
+    undo_blocks[undo_curr].x = x;
+    undo_blocks[undo_curr].y = y;
+    undo_blocks[undo_curr].z = z;
+    undo_blocks[undo_curr].w = get_block(x,y,z);
+
+    undo_signs[undo_curr].size = 0;
+    /* Loop through all signs in the chunk and retrieve the ones for all
+       faces of this cube.  The undo_signs list has space allocated for 6,
+       so it should always have room. */
+    get_signs(&undo_signs[undo_curr], x, y, z);
 }
 
 void get_camera_displacement(float rx, float ry,
@@ -2122,6 +2126,86 @@ void tree(Block *block) {
     }
 }
 
+void undo(){
+    if( undo_curr >= 0 && undo_curr != undo_start ){
+        int x = undo_blocks[undo_curr].x;
+        int y = undo_blocks[undo_curr].y;
+        int z = undo_blocks[undo_curr].z;
+
+        /* Save current block that's there before we undo, so we can redo */
+        Block tempb;
+        tempb.x = x;
+        tempb.y = y;
+        tempb.z = z;
+        tempb.w = get_block(x,y,z);
+        SignList temps; 
+        sign_list_alloc(&temps, 6);
+        get_signs(&temps, x, y, z);
+
+        set_block(x, y, z, undo_blocks[undo_curr].w);
+        /* If this block had any signs, restore them */
+        Sign *undo_sign = undo_signs[undo_curr].data;
+        for( int i = 0; i < undo_signs[undo_curr].size; i++ ){
+            set_sign(undo_blocks[undo_curr].x, undo_blocks[undo_curr].y,
+              undo_blocks[undo_curr].z, undo_sign->face, undo_sign->text);
+            undo_sign++;
+        }
+        
+        /* Save the block data that was there before the undo in the slot */
+        memcpy( &undo_blocks[undo_curr], &tempb, sizeof(Block) );
+        memcpy( undo_signs[undo_curr].data, temps.data, sizeof(Sign)*6 );
+        undo_signs[undo_curr].size = temps.size;
+
+        undo_curr--;
+        if( undo_curr < 0 ){
+          undo_curr = UNDO_NUM-1;
+        }
+        sign_list_free(&temps);
+    }else{
+        add_message("No undos left.");
+    }
+}
+
+void redo(){
+    if( undo_curr != redo_curr ){
+        /* Go to the next undo, which has been loaded with the redo info */
+        undo_curr++;
+        undo_curr %= UNDO_NUM;
+
+        int x = undo_blocks[undo_curr].x;
+        int y = undo_blocks[undo_curr].y;
+        int z = undo_blocks[undo_curr].z;
+        
+        /* Save current block that's there before we redo, so we can undo */
+        Block tempb;
+        tempb.x = x;
+        tempb.y = y;
+        tempb.z = z;
+        tempb.w = get_block(x,y,z);
+        SignList temps; 
+        sign_list_alloc(&temps, 6);
+        get_signs(&temps, x, y, z);
+
+        set_block(x, y, z, undo_blocks[undo_curr].w);
+        /* If this block had any signs, restore them */
+        Sign *undo_sign = undo_signs[undo_curr].data;
+        for( int i = 0; i < undo_signs[undo_curr].size; i++ ){
+            set_sign(undo_blocks[undo_curr].x, undo_blocks[undo_curr].y,
+              undo_blocks[undo_curr].z, undo_sign->face, undo_sign->text);
+            undo_sign++;
+        }
+
+        /* Save the block data that was there before the redo in the slot */
+        memcpy( &undo_blocks[undo_curr], &tempb, sizeof(Block) );
+        memcpy( undo_signs[undo_curr].data, temps.data, sizeof(Sign)*6 );
+        undo_signs[undo_curr].size = temps.size;
+
+        sign_list_free(&temps);
+    }else{
+        add_message("No redos left.");
+    }
+}
+
 void parse_command(const char *buffer, int forward) {
     char username[128] = {0};
     char token[128] = {0};
@@ -2229,6 +2313,9 @@ void parse_command(const char *buffer, int forward) {
     }
     else if (strcmp(buffer, "/undo") == 0) {
         undo();
+    }
+    else if (strcmp(buffer, "/redo") == 0) {
+        redo();
     }
     else if (forward) {
         client_talk(buffer);
@@ -2906,8 +2993,10 @@ int main(int argc, char **argv) {
         g->player_count = 1;
 
 	// INITIALIZE UNDO VARIABLES //
-	undo_valid = 0;
-	sign_list_alloc(&undo_signs, 6);
+        undo_start = UNDO_NUM-1;
+        for( int i = 0; i < UNDO_NUM; i++ ){
+	    sign_list_alloc(&undo_signs[i], 6);
+        }
 
         // LOAD STATE FROM DATABASE //
         int loaded = db_load_state(&s->x, &s->y, &s->z, &s->rx, &s->ry);
